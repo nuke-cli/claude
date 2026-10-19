@@ -3,3 +3,8 @@
 [claude] test reply one
 [user] test prompt two
 ==== END OF SESSION_ID test-s1 ====
+==== START OF SESSION_ID test-s2 ====
+[user] test prompt one
+[claude] test reply one
+[user] test prompt two
+==== END OF SESSION_ID test-s2 ====
