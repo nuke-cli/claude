@@ -1,4 +1,5 @@
 ==== START OF SESSION_ID test-s1 ====
 [user] test prompt one
 [claude] test reply one
+[user] test prompt two
 ==== END OF SESSION_ID test-s1 ====
