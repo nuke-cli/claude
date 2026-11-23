@@ -87,8 +87,10 @@ They are signed and come from their usual maintainers. If a minimum release-age 
 | `qs` | 6.16.2 | Now patched under both `body-parser` and `express` (previously `express` still had 6.14.x) |
 | `webpack-cli` | 7.3.1 | Was flagged through `webpack-dev-server` |
 
+> **Superseded by decision 5.** The `express`, `http-proxy-middleware` and `qs` versions above were correct at this step, but the `webpack-dev-server` 6 upgrade replaced them with new major versions (Express 5, `http-proxy-middleware` 4, `qs` 6.17.1). See decision 5 for what's actually installed. This correction came from the PR #4 review (decision 7).
+
 **Result:** total 17 → 14 (13 moderate, 1 low). `npm test` passes, `npm run build` compiles, and the dev server starts and returns HTTP 200.
-**Commit:** pending. Only `package-lock.json` changed.
+**Commit:** `8304f70 fix(deps): patch moderate and low audit vulnerabilities` (together with decisions 5 and 6).
 
 ### 5. `webpack-dev-server` 5 → 6: upgraded (2026-11-23)
 
@@ -99,11 +101,23 @@ They are signed and come from their usual maintainers. If a minimum release-age 
 - `sockjs` and `uuid` were removed from the dependency tree. v6 drops SockJS and uses the native `ws` WebSocket server.
 - No changes to `webpack.config.js` were needed.
 
+**Transitive major upgrades pulled in by v6.** These replace the versions from decision 4 and were missed in the first version of this log:
+
+| Package | Decision 4 | Installed now |
+|---|---|---|
+| `express` | 4.22.3 | **5.3.0** (major) |
+| `http-proxy-middleware` | 2.0.12 | **4.2.2** (major; requires Node `^22.15.0 \|\| ^24.0.0 \|\| >=26.0.0`) |
+| `body-parser` | 1.20.9 | **2.4.0** (major) |
+| `path-to-regexp` | (Express 4 version) | **8.4.2** (major; stricter route syntax) |
+| `qs` | 6.16.2 | **6.17.1** |
+
+These only run inside the local dev server. The project doesn't define custom Express middleware or proxy rules, so the Express 5 routing changes don't affect it. The verification below was run against this tree.
+
 **Compatibility review** (against the [v6 migration guide](https://github.com/webpack/webpack-dev-server/blob/main/migration-v6.md)):
 - The project's `devServer` options (`static`, `hot`, `historyApiFallback`, `port`, `open`) are not affected by any documented v6 breaking change.
 - The project doesn't use any of the v6 breaking areas: `proxy` / `bypass`, `setupMiddlewares` / custom Express middleware (v6 moves to Express 5), `server: 'spdy'`, `webSocketServer: 'sockjs'`, or `Server.internalIP`.
 - Peer requirements are met: `webpack@5.106.2` (needs `^5.101.0`) and `webpack-cli@7.3.1` (supports `^5.0.0 || ^6.0.0`).
-- **New requirement: Node.js >= 22.15.0.** Local development uses Node 24.21.0. Anyone running `npm run dev` on an older Node must upgrade. Consider adding `"engines": { "node": ">=22.15.0" }` to `package.json`.
+- **New requirement: Node.js >= 22.15.0.** Local development uses Node 24.21.0. Anyone running `npm run dev` on an older Node must upgrade. Now enforced in `package.json` (decision 7).
 - v6 removed the dev server's own CLI flags. The `dev` script (`webpack serve --mode development`) still works because `--mode` is a `webpack-cli` flag.
 
 **Verification:**
@@ -112,7 +126,7 @@ They are signed and come from their usual maintainers. If a minimum release-age 
 - `npm run build`: compiles successfully.
 
 **Result:** total 14 → 11 (10 moderate, 1 low). Only the Jest chain and `@babel/core` remain.
-**Commit:** pending. `package.json` and `package-lock.json` changed.
+**Commit:** `8304f70 fix(deps): patch moderate and low audit vulnerabilities`.
 
 ### 6. Low: fixed (2026-11-23)
 
@@ -125,9 +139,23 @@ They are signed and come from their usual maintainers. If a minimum release-age 
 `7.29.13` was published on 2026-11-04 (19 days before the fix), so it falls outside the very-new-release concern in decision 3.
 
 **Result:** total 11 → 10 (10 moderate, 0 low). `npm test` passes and `npm run build` compiles.
-**Commit:** pending. Only `package-lock.json` changed for this step.
+**Commit:** `8304f70 fix(deps): patch moderate and low audit vulnerabilities`.
 
 **Re-check (2026-11-23):** `jest@30.5.2` is the latest release, but its `jest-config` still depends on `glob@^13.0.6`, which is inside the vulnerable range. Upgrading Jest doesn't resolve item A yet.
+
+### 7. PR #4 review fixes (2026-11-23)
+
+A code review of PR #4 found 7 issues. None broke the app at runtime. Five were fixed on `audit-packages`, one commit each:
+
+| # | Finding | Fix | Commit |
+|---|---|---|---|
+| 6 | *(pre-existing)* `jest.config.json` maps style imports to `identity-obj-proxy`, which wasn't installed, so any test importing `.css`/`.scss` failed | Added `identity-obj-proxy@^3.0.0`. Verified with a temporary test importing `index.scss`: failed before, passes after | `3d78441 fix(test): add missing identity-obj-proxy for style imports` |
+| 7 | *(pre-existing)* `devServer.static` pointed at `build/`, which `CleanWebpackPlugin` wipes, so `npm run dev` could serve stale files | Point `static` at `public/`. Verified that `/` serves the in-memory build, routing fallback works, and a stray file in `build/` returns 404 | `415689a fix(dev): serve static files from public instead of build output` |
+| 2 | Nothing enforced the Node >= 22.15.0 requirement from decision 5 | Added `"engines": { "node": ">=22.15.0" }`, `.npmrc` with `engine-strict=true`, and `.nvmrc` (`24`). Verified that an unsupported Node version makes `npm install` fail with `EBADENGINE` | `0e46aaa build: require Node.js >= 22.15.0` |
+| 4, 5 | `BundleAnalyzerPlugin` with `analyzerMode: 'disabled'` produced nothing despite its comment; new lines used spaces instead of tabs | `analyzerMode: 'static'`, `openAnalyzer: false`: each build writes `build/report.html` and exits with no server. Re-indented; `prettier --check` passes | `56e68de fix(build): write static bundle report and fix indentation` |
+| 1 | The PR description and this log listed pre-upgrade versions for `express`, `http-proxy-middleware` and `qs` | Corrected decisions 4 and 5 and the PR description | This log update |
+
+Not fixed: finding 3, tracked as open item E.
 
 ## Open items
 
@@ -203,6 +231,12 @@ Resolved by updating `@babel/core` to 7.29.13 (decision 6).
 ### D. `ts-jest` / `jest` version mismatch: follow-up
 
 `ts-jest@29.4.9` is installed alongside `jest@30.3.0`. Align it to a Jest 30–compatible `ts-jest` when item A is revisited.
+
+### E. `@types/jest` isn't loaded by TypeScript: follow-up
+
+From the PR #4 review (finding 3). `tsconfig.json` sets `"types": []`, which turns off automatic loading of `@types/*` packages, so `@types/jest` has no effect: `test` and `expect` stay untyped for `tsc` and in the editor. Tests still run because `ts-jest` transpiles without type-checking (`isolatedModules: true`).
+
+**Fix options:** add `"jest"` to `compilerOptions.types`, ideally in a test-only `tsconfig` so Jest globals don't leak into app code, or remove `@types/jest`.
 
 ## How to check
 
