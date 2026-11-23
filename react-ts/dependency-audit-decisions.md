@@ -22,6 +22,8 @@ The 10 remaining findings are all the Jest chain (item A). See [Open items](#ope
 - **No breaking changes without an explicit decision.** Fixes use `npm update <pkg>` to stay within the version ranges `package.json` already allows. `npm audit fix --force` is not used.
 - **Fix by severity, one step at a time.** Critical first, then high, then moderate, each verified separately.
 - **Verify every step** with `npm test`, `npm run build` and, when dev-server packages change, `npm run dev`.
+- **Changes to `webpack.config.js` are checked in both modes** (`npm run build` and `npm run dev`, including a rebuild), because the config is shared. *(Added after decision 8.)*
+- **`engines` must match every locked package.** Check it against each package's `engines.node` after any dependency change. With `engine-strict`, a range wider than the dependencies allow breaks installs. *(Added after decision 8.)*
 - **Commit only what is staged.** Lockfile changes are committed separately from unrelated work in progress.
 
 ## Decision log
@@ -117,7 +119,7 @@ These only run inside the local dev server. The project doesn't define custom Ex
 - The project's `devServer` options (`static`, `hot`, `historyApiFallback`, `port`, `open`) are not affected by any documented v6 breaking change.
 - The project doesn't use any of the v6 breaking areas: `proxy` / `bypass`, `setupMiddlewares` / custom Express middleware (v6 moves to Express 5), `server: 'spdy'`, `webSocketServer: 'sockjs'`, or `Server.internalIP`.
 - Peer requirements are met: `webpack@5.106.2` (needs `^5.101.0`) and `webpack-cli@7.3.1` (supports `^5.0.0 || ^6.0.0`).
-- **New requirement: Node.js >= 22.15.0.** Local development uses Node 24.21.0. Anyone running `npm run dev` on an older Node must upgrade. Now enforced in `package.json` (decision 7).
+- **New requirement: Node.js `^22.15.0 || ^24.0.0 || >=26.0.0`.** Local development uses Node 24.21.0. `http-proxy-middleware` 4 excludes Node 25, and Jest 30 excludes Node 23. Now enforced in `package.json` (decisions 7 and 8).
 - v6 removed the dev server's own CLI flags. The `dev` script (`webpack serve --mode development`) still works because `--mode` is a `webpack-cli` flag.
 
 **Verification:**
@@ -151,11 +153,32 @@ A code review of PR #4 found 7 issues. None broke the app at runtime. Five were 
 |---|---|---|---|
 | 6 | *(pre-existing)* `jest.config.json` maps style imports to `identity-obj-proxy`, which wasn't installed, so any test importing `.css`/`.scss` failed | Added `identity-obj-proxy@^3.0.0`. Verified with a temporary test importing `index.scss`: failed before, passes after | `3d78441 fix(test): add missing identity-obj-proxy for style imports` |
 | 7 | *(pre-existing)* `devServer.static` pointed at `build/`, which `CleanWebpackPlugin` wipes, so `npm run dev` could serve stale files | Point `static` at `public/`. Verified that `/` serves the in-memory build, routing fallback works, and a stray file in `build/` returns 404 | `415689a fix(dev): serve static files from public instead of build output` |
-| 2 | Nothing enforced the Node >= 22.15.0 requirement from decision 5 | Added `"engines": { "node": ">=22.15.0" }`, `.npmrc` with `engine-strict=true`, and `.nvmrc` (`24`). Verified that an unsupported Node version makes `npm install` fail with `EBADENGINE` | `0e46aaa build: require Node.js >= 22.15.0` |
-| 4, 5 | `BundleAnalyzerPlugin` with `analyzerMode: 'disabled'` produced nothing despite its comment; new lines used spaces instead of tabs | `analyzerMode: 'static'`, `openAnalyzer: false`: each build writes `build/report.html` and exits with no server. Re-indented; `prettier --check` passes | `56e68de fix(build): write static bundle report and fix indentation` |
-| 1 | The PR description and this log listed pre-upgrade versions for `express`, `http-proxy-middleware` and `qs` | Corrected decisions 4 and 5 and the PR description | This log update |
+| 2 | Nothing enforced the Node >= 22.15.0 requirement from decision 5 | Added `"engines": { "node": ">=22.15.0" }`, `.npmrc` with `engine-strict=true`, and `.nvmrc` (`24`). Verified that an unsupported Node version makes `npm install` fail with `EBADENGINE` | `0e46aaa build: require Node.js >= 22.15.0` *(range narrowed in decision 8)* |
+| 4, 5 | `BundleAnalyzerPlugin` with `analyzerMode: 'disabled'` produced nothing despite its comment; new lines used spaces instead of tabs | `analyzerMode: 'static'`, `openAnalyzer: false`: each build writes `build/report.html` and exits with no server. Re-indented; `prettier --check` passes | `56e68de fix(build): write static bundle report and fix indentation` *(refined in decision 8)* |
+| 1 | The PR description and this log listed pre-upgrade versions for `express`, `http-proxy-middleware` and `qs` | Corrected decisions 4 and 5 and the PR description | `nuke-cli/claude@cd76f51` |
 
 Not fixed: finding 3, tracked as open item E.
+
+The findings and a reply for each were posted on PR #4 as a comment-only review (inline comments with replies linking the fix commits).
+
+### 8. Second PR #4 review fixes (2026-11-23)
+
+A second code review of PR #4 found 4 issues: 1 important and 3 nits. Two came from fixes in decision 7, and one repeated a first-review finding. Three were fixed on `audit-packages`, one commit each:
+
+| # | Finding | Fix | Commit |
+|---|---|---|---|
+| 1 | *(important; regression from decision 7)* `engines: ">=22.15.0"` was wider than the dependencies allow. With `engine-strict`, Node 23 and 25 passed the project check and then failed with `EBADENGINE` on a dependency: Jest 30 needs `^22.0.0 \|\| >=24.0.0`, and `http-proxy-middleware` 4 needs `^22.15.0 \|\| ^24.0.0 \|\| >=26.0.0` | Narrowed `engines` to `^22.15.0 \|\| ^24.0.0 \|\| >=26.0.0`, the overlap of all dependency ranges. Verified against every locked package: 22.15, 24.0 and 26.0 are accepted with 0 dependency blockers; 22.14, 23.11 and 25.2 are rejected by the project's own check | `5b9b88f build: limit engines to Node versions dependencies support` |
+| 2 | *(regression from decision 7)* The shared plugin list meant `BundleAnalyzerPlugin` in static mode regenerated and wrote the report on every dev-server rebuild | `webpack.config.js` now exports `(env, argv) => config` and adds the analyzer only when `argv.mode === 'production'`. Verified: `npm run build` writes the report; `npm run dev` compiled twice (startup plus a rebuild) and wrote no report | `fce6f4b fix(build): run bundle analyzer only for production builds` |
+| 3 | *(regression from decision 7)* `npm run build` wrote `report.html` into `build/`, so deploying `build/` as-is would publish the app's module tree | `reportFilename` set to `reports/bundle-report.html` (outside the output folder) and `reports` added to `.gitignore`. Verified: `build/` contains only the app files plus `stats.json` | `2f4b9bc fix(build): write bundle report outside the deployed build folder` |
+| 4 | `@types/jest` isn't loaded (`"types": []`). Same as first-review finding 3 | Not fixed. Still tracked as open item E | n/a |
+
+**Also found by the review:** the `ts-jest` / `jest` mismatch in open item D isn't real. `ts-jest@29.4.9` declares `peerDependencies.jest: ^29.0.0 || ^30.0.0`, and `npm ls ts-jest` reports no peer errors. Item D is closed.
+
+**Accepted for now:** `stats.json` (from `StatsWriterPlugin`) is still written into `build/`. That was the case before this PR and is out of scope here.
+
+**PR #4 updated:** the description reflects the new Node range and the analyzer behaviour, and drops the `ts-jest` note. The 4 findings and their replies were posted as a second comment-only review.
+
+**Lesson:** two of the three issues were introduced by the previous round of review fixes. Fixes to build tooling and `engines` should be checked against both `npm run build` and `npm run dev`, and an `engines` range should be checked against every locked package.
 
 ## Open items
 
@@ -206,7 +229,7 @@ The rest of the Jest packages (`jest`, `jest-cli`, `@jest/core`, `@jest/reporter
    This needs verification that Jest still works with the newer major versions (`npm test`).
 3. **Downgrade to `jest@29.7.0`** *(not recommended)*. It's a step backwards and would also mean downgrading `jest-environment-jsdom` and `@types/jest`.
 
-When this is revisited, also handle the `ts-jest` mismatch (item D).
+If Jest is upgraded or downgraded when this is revisited, re-check the `engines` range (decision 8): Jest 30's Node range is one of the inputs to it.
 
 ### B. `webpack-dev-server` → `sockjs` → `uuid` (3 moderate): resolved
 
@@ -228,13 +251,13 @@ webpack-dev-server@5.2.7   (latest 5.x, still flagged)
 
 Resolved by updating `@babel/core` to 7.29.13 (decision 6).
 
-### D. `ts-jest` / `jest` version mismatch: follow-up
+### D. `ts-jest` / `jest` version mismatch: closed (not an issue)
 
-`ts-jest@29.4.9` is installed alongside `jest@30.3.0`. Align it to a Jest 30–compatible `ts-jest` when item A is revisited.
+`ts-jest@29.4.9` is installed alongside `jest@30.3.0`, which looked like a mismatch. It isn't: `ts-jest@29.4.9` declares `peerDependencies.jest: ^29.0.0 || ^30.0.0`, and `npm ls ts-jest` reports no peer errors. Found by the second PR #4 review (decision 8).
 
 ### E. `@types/jest` isn't loaded by TypeScript: follow-up
 
-From the PR #4 review (finding 3). `tsconfig.json` sets `"types": []`, which turns off automatic loading of `@types/*` packages, so `@types/jest` has no effect: `test` and `expect` stay untyped for `tsc` and in the editor. Tests still run because `ts-jest` transpiles without type-checking (`isolatedModules: true`).
+From the PR #4 reviews (first review finding 3, repeated as second review finding 4). `tsconfig.json` sets `"types": []`, which turns off automatic loading of `@types/*` packages, so `@types/jest` has no effect: `test` and `expect` stay untyped for `tsc` and in the editor. Tests still run because `ts-jest` transpiles without type-checking (`isolatedModules: true`).
 
 **Fix options:** add `"jest"` to `compilerOptions.types`, ideally in a test-only `tsconfig` so Jest globals don't leak into app code, or remove `@types/jest`.
 
