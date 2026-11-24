@@ -15,7 +15,7 @@ A running log of the decisions made while fixing `npm audit` findings in [`nuke-
 | Low | 1 | **0** |
 | **Total** | **36** | **10** |
 
-The 10 remaining findings are all the Jest chain (item A). See [Open items](#open-items).
+The 10 remaining findings are all the Jest chain (item A). Items F and G are Jest config follow-ups unrelated to the audit. See [Open items](#open-items).
 
 ## Ground rules
 
@@ -157,7 +157,7 @@ A code review of PR #4 found 7 issues. None broke the app at runtime. Five were 
 | 4, 5 | `BundleAnalyzerPlugin` with `analyzerMode: 'disabled'` produced nothing despite its comment; new lines used spaces instead of tabs | `analyzerMode: 'static'`, `openAnalyzer: false`: each build writes `build/report.html` and exits with no server. Re-indented; `prettier --check` passes | `56e68de fix(build): write static bundle report and fix indentation` *(refined in decision 8)* |
 | 1 | The PR description and this log listed pre-upgrade versions for `express`, `http-proxy-middleware` and `qs` | Corrected decisions 4 and 5 and the PR description | `nuke-cli/claude@cd76f51` |
 
-Not fixed: finding 3, tracked as open item E.
+Not fixed: finding 3, tracked as open item E. *(Later shown to be a false positive, see decision 11.)*
 
 The findings and a reply for each were posted on PR #4 as a comment-only review (inline comments with replies linking the fix commits).
 
@@ -170,11 +170,11 @@ A second code review of PR #4 found 4 issues: 1 important and 3 nits. Two came f
 | 1 | *(important; regression from decision 7)* `engines: ">=22.15.0"` was wider than the dependencies allow. With `engine-strict`, Node 23 and 25 passed the project check and then failed with `EBADENGINE` on a dependency: Jest 30 needs `^22.0.0 \|\| >=24.0.0`, and `http-proxy-middleware` 4 needs `^22.15.0 \|\| ^24.0.0 \|\| >=26.0.0` | Narrowed `engines` to `^22.15.0 \|\| ^24.0.0 \|\| >=26.0.0`, the overlap of all dependency ranges. Verified against every locked package: 22.15, 24.0 and 26.0 are accepted with 0 dependency blockers; 22.14, 23.11 and 25.2 are rejected by the project's own check | `5b9b88f build: limit engines to Node versions dependencies support` |
 | 2 | *(regression from decision 7)* The shared plugin list meant `BundleAnalyzerPlugin` in static mode regenerated and wrote the report on every dev-server rebuild | `webpack.config.js` now exports `(env, argv) => config` and adds the analyzer only when `argv.mode === 'production'`. Verified: `npm run build` writes the report; `npm run dev` compiled twice (startup plus a rebuild) and wrote no report | `fce6f4b fix(build): run bundle analyzer only for production builds` |
 | 3 | *(regression from decision 7)* `npm run build` wrote `report.html` into `build/`, so deploying `build/` as-is would publish the app's module tree | `reportFilename` set to `reports/bundle-report.html` (outside the output folder) and `reports` added to `.gitignore`. Verified: `build/` contains only the app files plus `stats.json` | `2f4b9bc fix(build): write bundle report outside the deployed build folder` |
-| 4 | `@types/jest` isn't loaded (`"types": []`). Same as first-review finding 3 | Not fixed. Still tracked as open item E | n/a |
+| 4 | `@types/jest` isn't loaded (`"types": []`). Same as first-review finding 3 | Not fixed. Still tracked as open item E *(false positive, see decision 11)* | n/a |
 
 **Also found by the review:** the `ts-jest` / `jest` mismatch in open item D isn't real. `ts-jest@29.4.9` declares `peerDependencies.jest: ^29.0.0 || ^30.0.0`, and `npm ls ts-jest` reports no peer errors. Item D is closed.
 
-**Accepted for now:** `stats.json` (from `StatsWriterPlugin`) is still written into `build/`. That was the case before this PR and is out of scope here.
+**Accepted for now:** `stats.json` (from `StatsWriterPlugin`) is still written into `build/`. That was the case before this PR and is out of scope here. *(Reversed in decision 10: moved to `reports/`.)*
 
 **PR #4 updated:** the description reflects the new Node range and the analyzer behaviour, and drops the `ts-jest` note. The 4 findings and their replies were posted as a second comment-only review.
 
@@ -203,6 +203,40 @@ A second code review of PR #4 found 4 issues: 1 important and 3 nits. Two came f
 **Commit:** `cee0d2b fix(build): disable source maps for production builds`. The current form is in `f551407` (`devtool: isProduction ? false : 'source-map'`).
 
 **Documented in:** the PR #4 description (new "Behaviour change" section).
+
+### 10. Third PR #4 review fixes (2026-11-24)
+
+A third code review of PR #4 found 7 issues: 1 important, 3 pre-existing and 3 nits. Two of the nits came from the analyzer change in decision 8. Four were fixed on `audit-packages`, in 3 commits:
+
+| # | Finding | Fix | Commit |
+|---|---|---|---|
+| 1 | *(important)* `StatsWriterPlugin` (assets, chunks, modules) still wrote `build/stats.json`, so deploying `build/` published dependency paths such as `node_modules/react/index.js` after the bundle report had been moved out | Write it to `reports/stats.json` (git-ignored), next to the bundle report. Verified: same content, `build/` no longer has it, the dev server returns 404 for it | `e500391 fix(build): write stats.json outside the deployed build folder` |
+| 2 | *(pre-existing)* `devtool: 'source-map'` in every mode published the full source in `build/*.js.map` | `devtool: false` for production. See decision 9 | `cee0d2b fix(build): disable source maps for production builds` |
+| 5 | *(regression from decision 8)* The exported function pushed onto a shared `config.plugins`, so calling it twice for production stacked two analyzers | Return a new config object on every call. *(Completed in decision 11: plugin instances were still shared)* | `d718fee refactor(build): derive mode once and stop mutating shared config` |
+| 6 | *(regression from decision 8)* `mode: 'development'` was hardcoded while the analyzer checked `argv.mode`, so `webpack serve --mode production` regenerated the report on every rebuild | Read the mode once (`argv.mode`, default `'development'`) and use it for `mode`, `devtool` and the analyzer. Skip the analyzer under `webpack serve` (`env.WEBPACK_SERVE`, confirmed set by webpack-cli 7). Verified: `webpack serve --mode production` compiled and rebuilt without writing a report | `d718fee` (same commit) |
+| 3 | *(pre-existing)* `collectCoverageFrom` only covers `src/{components,containers}/**`, and neither folder exists, so coverage always reports 0 files | Not fixed. Jest config, unrelated to the audit. Open item F | n/a |
+| 4 | *(pre-existing)* The `@components` entry in `moduleNameMapper` isn't anchored: any import containing `@components` is redirected, and `@components/Button` resolves to the folder | Not fixed. Jest config, unrelated to the audit. Open item G | n/a |
+| 7 | `@types/jest` isn't loaded. Third time reported | Not fixed at the time (item E). Shown to be a false positive in decision 11 | n/a |
+
+**Verification:** `npm run build` writes `bundle-report.html` and `stats.json` to `reports/`, and `build/` holds only `index.html`, the bundle and its license file. `npm run dev` loads, routing fallback works, source maps are served and no report is written. Tests pass, Prettier passes.
+
+### 11. Fourth PR #4 review fixes (2026-11-24)
+
+A fourth code review of PR #4 found 5 issues: 2 pre-existing and 3 nits, none blocking. This reviewer ran the build, the tests and the dev server. All five were addressed:
+
+| # | Finding | Fix | Commit |
+|---|---|---|---|
+| 1 | *(pre-existing)* `CleanWebpackPlugin` also ran under the dev server and emptied `build/` on disk, so every `npm run dev` deleted the last production build | Add `CleanWebpackPlugin` only when not running under `webpack serve`. Verified: `build/` survives `npm run dev` | `f551407 fix(build): build plugins per mode and keep dev server off build/` |
+| 4 | *(from decision 10)* The "fresh config" comment overstated it: each call returned a new object, but plugin instances were created once at module load and shared | Create the whole config, including plugin instances, inside the exported function. Verified: two calls share no objects | `f551407` (same commit) |
+| 5 | `StatsWriterPlugin` also ran under the dev server, writing `stats.json` into memory on every rebuild where nothing reads it | Add it only for production builds (`isProduction && !isDevServer`), like the analyzer | `f551407` (same commit) |
+| 2 | *(pre-existing)* `tsc --noEmit -p .` failed with TS2882 on `import './index.scss'` (`noUncheckedSideEffectImports` with no stylesheet declaration) | Added `src/global.d.ts` declaring `*.scss` and `*.css`. Verified: `tsc` exits 0, and an import of a missing non-stylesheet module still fails with TS2882 | `2922165 fix(types): declare stylesheet modules for tsc` |
+| 3 | The PR description didn't mention that production builds no longer have source maps | Added a "Behaviour change" section to the PR #4 description and recorded decision 9 | `nuke-cli/claude@9d70b70` |
+
+**Production output unchanged:** after `f551407` the production bundle hash is the same as before the change (`main.bd5a611…`).
+
+**Item E closed as a false positive.** Checked while reviewing: `@types/jest` *is* loaded. `@testing-library/jest-dom`'s type files reference it, so `"types": []` doesn't keep it out. `tsc --listFiles` includes `node_modules/@types/jest/index.d.ts`, and `tsc` reports no `test`/`expect` errors in `src/App.test.tsx`. Every earlier review (and the replies saying "tracked as item E") had this wrong.
+
+**Lesson:** a claim repeated across reviews isn't evidence. Check it (here with `tsc --listFiles`) before tracking it as an open item.
 
 ## Open items
 
@@ -279,11 +313,23 @@ Resolved by updating `@babel/core` to 7.29.13 (decision 6).
 
 `ts-jest@29.4.9` is installed alongside `jest@30.3.0`, which looked like a mismatch. It isn't: `ts-jest@29.4.9` declares `peerDependencies.jest: ^29.0.0 || ^30.0.0`, and `npm ls ts-jest` reports no peer errors. Found by the second PR #4 review (decision 8).
 
-### E. `@types/jest` isn't loaded by TypeScript: follow-up
+### E. `@types/jest` isn't loaded by TypeScript: closed (false positive)
 
-From the PR #4 reviews (first review finding 3, repeated as second review finding 4). `tsconfig.json` sets `"types": []`, which turns off automatic loading of `@types/*` packages, so `@types/jest` has no effect: `test` and `expect` stay untyped for `tsc` and in the editor. Tests still run because `ts-jest` transpiles without type-checking (`isolatedModules: true`).
+Reported by the first three PR #4 reviews: `tsconfig.json` sets `"types": []`, which turns off automatic loading of `@types/*` packages, so `@types/jest` was assumed to have no effect.
 
-**Fix options:** add `"jest"` to `compilerOptions.types`, ideally in a test-only `tsconfig` so Jest globals don't leak into app code, or remove `@types/jest`.
+It does load: `@testing-library/jest-dom`'s type files reference `@types/jest`, so it's included regardless of `"types"`. `tsc --listFiles` lists `node_modules/@types/jest/index.d.ts`, and `tsc --noEmit -p .` passes with no errors in `src/App.test.tsx`. Closed in decision 11. No change needed.
+
+### F. Coverage reports 0 files: follow-up
+
+*(Pre-existing; third PR #4 review, finding 3.)* `jest.config.json` sets `collectCoverageFrom` to `src/{components,containers}/**`, and neither folder exists, so coverage is always empty.
+
+**Fix:** widen it to `src/**/*.{ts,tsx}` and exclude test files (`!src/**/*.test.{ts,tsx}`) and declaration files (`!src/**/*.d.ts`). Out of scope for the audit PR.
+
+### G. Unanchored `@components` mapper: follow-up
+
+*(Pre-existing; third PR #4 review, finding 4.)* The `@components` key in `moduleNameMapper` has no anchors, so any import path containing `@components` is redirected, and `@components/Button` resolves to the folder instead of the file.
+
+**Fix:** replace it with `^@components$` and `^@components/(.*)$` mapping to `<rootDir>/src/components/$1`. Out of scope for the audit PR.
 
 ## How to check
 
