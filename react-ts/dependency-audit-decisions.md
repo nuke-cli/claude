@@ -180,6 +180,30 @@ A second code review of PR #4 found 4 issues: 1 important and 3 nits. Two came f
 
 **Lesson:** two of the three issues were introduced by the previous round of review fixes. Fixes to build tooling and `engines` should be checked against both `npm run build` and `npm run dev`, and an `engines` range should be checked against every locked package.
 
+### 9. No source maps in production builds (2026-11-24)
+
+**Decision:** Set `devtool: false` for production builds. Development keeps `'source-map'`.
+
+**Why:** `devtool: 'source-map'` applied to every mode, so `npm run build` wrote `build/main.<hash>.js.map` with the full original `src/**` code in `sourcesContent`. Deploying `build/` published the source code. Found by the third PR #4 review (it was there before this PR).
+
+**Options considered:**
+
+| Option | Result | Chosen |
+|---|---|---|
+| `devtool: false` for production | No `.map` files and no `sourceMappingURL` in the bundle; source isn't published | ✅ |
+| `'hidden-source-map'` | No reference in the bundle, but the `.map` files (with full source) are still written to `build/` and deployed | ❌ |
+| Keep `'source-map'` | Full source published with the app | ❌ |
+
+**Trade-off accepted:** errors from the deployed app show minified stack traces (line 1, column N) that can't be mapped back to the source.
+
+**If readable production stack traces are needed later:** generate source maps outside `build/` (or delete them after upload) and upload them to an error tracker. Don't deploy them.
+
+**Verification:** after `npm run build`, `build/` has no `.map` files and the bundle has no source-map reference. The only `sourceMappingURL` text in it is a string inside `style-loader`'s runtime, used only for CSS source maps. `npm run dev` still serves `main.<hash>.js.map` (HTTP 200).
+
+**Commit:** `cee0d2b fix(build): disable source maps for production builds`. The current form is in `f551407` (`devtool: isProduction ? false : 'source-map'`).
+
+**Documented in:** the PR #4 description (new "Behaviour change" section).
+
 ## Open items
 
 ### A. Jest 30 → `glob` / `minimatch` (10 moderate): deferred
